@@ -261,6 +261,14 @@ describe('scoreChange', () => {
   })
 })
 
+function spans(text: string) {
+  return { spans: [{ text, __typename: 'Span' }], __typename: 'FormattedText' }
+}
+
+function clientLabel(text: string) {
+  return { text: spans(text), impressionEvent: null, __typename: 'BasicClientLabel' }
+}
+
 describe('parseCreditScore', () => {
   const report = (creditReport: Record<string, unknown>) => ({
     data: { creditReportsV2: { creditReport } },
@@ -305,6 +313,45 @@ describe('parseCreditScore', () => {
       score: { value: 1, model: 'nested' },
       model: 'outer',
     }), null).model).toBe('outer')
+    expect(parseCreditScore(report({
+      scoreModel: 'FICO',
+      scoreLabel: clientLabel('Your VantageScore 3.0'),
+    }), null).model).toBe('FICO')
+  })
+
+  it('reads a BasicClientLabel and takes the model from that text', () => {
+    expect(parseCreditScore(report({
+      score: 736,
+      scoreLabel: clientLabel('Your Equifax VantageScore 3.0 on Oct 14, 2026:'),
+    }), null)).toMatchObject({
+      score: 736,
+      label: 'Your Equifax VantageScore 3.0 on Oct 14, 2026:',
+      model: 'VantageScore 3.0',
+    })
+    expect(parseCreditScore(report({
+      scoreLabel: { spans: [{ text: 'Your Equifax score' }, { text: '  ' }, ' on Oct 14:', 1], __typename: 'FormattedText' },
+    }), null)).toMatchObject({ label: 'Your Equifax score   on Oct 14:', model: null })
+  })
+
+  it('finds a model named elsewhere and leaves it null when nothing names one', () => {
+    expect(parseCreditScore(report({
+      score: 700,
+      scoreLabel: { text: '   ', __typename: 'BasicClientLabel' },
+      footer: ['', { note: 'Scores use VantageScore  4.0.' }, 1],
+    }), null)).toMatchObject({ label: null, model: 'VantageScore 4.0' })
+
+    expect(parseCreditScore(report({
+      score: 700,
+      scoreLabel: { spans: [{ text: ' ' }, 2] },
+      aside: { nope: true },
+    }), null)).toMatchObject({ label: null, model: null })
+    expect(parseCreditScore(report({ score: 1, scoreLabel: 5 }), null)).toMatchObject({ label: null, model: null })
+    expect(parseCreditScore(report({
+      scoreLabel: clientLabel('Powered by VantageScore'),
+    }), null).model).toBe('VantageScore')
+    expect(parseCreditScore(report({
+      scoreLabel: { spans: [], text: spans('Still VantageScore 3') },
+    }), null)).toMatchObject({ label: 'Still VantageScore 3', model: 'VantageScore 3' })
   })
 
   it('throws when the report object is missing', () => {
@@ -496,6 +543,118 @@ describe('parseCreditReportDetails', () => {
     expect(details.collections).toEqual([])
     expect(details.buy_now_pay_later.map(a => a.institution)).toEqual(['Later Pay'])
     expect(details.buy_now_pay_later[0].credit_limit).toBe(80)
+  })
+
+  it('reads live inquiry, tradeline and public-record field names', () => {
+    const json = creditReport({
+      creditCards: [
+        tradeline({ hash: 'c1', institution: 'Card Co', balance: '10.00', limit: '100.00' }),
+        tradeline({ hash: 'c2', institution: 'Loan Co', balance: '5.00', limit: null }),
+        tradeline({ hash: 'c3', institution: 'Old Co', balance: '1.00', limit: null }),
+        tradeline({ hash: 'c4', institution: 'Worst Co', balance: '2.00', limit: null }),
+      ],
+    })
+    const cards = (json.data.creditReportsV2.creditReport.tradelines as { creditCards: Record<string, unknown>[] }).creditCards
+    Object.assign(cards[0], {
+      accountStanding: 'Good',
+      accountStatusText: spans('Open revolving account'),
+      late30Count: 0,
+      late60Count: 1,
+      late90Count: 2,
+      payments: {
+        currentPaymentStatus: 'Current',
+        currentPaymentStatusText: spans('Current'),
+        paymentHistory: {
+          years: [
+            {
+              value: 2026,
+              months: [
+                { month: 10, status: 'Current', statusText: spans('Current') },
+                { month: 9, status: '   ', statusText: spans('Late') },
+                null,
+                { month: 8, status: '   ' },
+              ],
+            },
+            null,
+            { value: 'not-a-year', months: [{ status: 'OK' }] },
+            { months: 'nope' },
+          ],
+        },
+      },
+    })
+    Object.assign(cards[1], {
+      accountStanding: '',
+      accountStatusText: spans('Paid'),
+      payments: { currentPaymentStatus: '', currentStatusString: 'OK', late30Count: 3, late60Count: 0 },
+      paymentHistory: { note: 'not a calendar' },
+    })
+    Object.assign(cards[2], {
+      accountStatusText: { spans: [] },
+      accountStandingLabel: spans('Closed'),
+      payments: { currentPaymentStatusText: spans('Past due'), paymentHistory: { years: [] } },
+    })
+    Object.assign(cards[3], { payments: {}, worstPayStatus: 'Worst' })
+    const report = json.data.creditReportsV2.creditReport as Record<string, unknown>
+    report.inquiries = [
+      {
+        dateInquired: '2026-10-01',
+        dateInquiredLabel: spans('Inquired on Oct 1, 2026'),
+        industryName: 'Banks',
+        institution: { name: 'Example Bank' },
+        __typename: 'CRSV2Inquiry',
+      },
+      {
+        dateInquired: '   ',
+        dateInquiredLabel: spans('Inquired on Sep 1, 2026'),
+        kind: spans('Hard'),
+        institution: { name: 'Other Lender' },
+      },
+    ]
+    report.publicRecords = {
+      bankruptcies: [],
+      taxLiens: [null, { court: 'County', amount: { amount: '12.00' } }],
+      legalItems: [{ publicRecordType: 'Judgment', status: 'Filed' }],
+      other: [{ court: 'Town' }],
+      __typename: 'CRSV2PublicRecords',
+    }
+
+    const details = parseCreditReportDetails(json, 'equifax', null)
+    expect(details.accounts[0]).toMatchObject({
+      account_status: 'Good',
+      payment_status: 'Current',
+      late_payments: { days_30: 0, days_60: 1, days_90: 2 },
+      payment_history: '2026-10:Current,2026-09:Late,OK',
+    })
+    expect(details.accounts[1]).toMatchObject({
+      account_status: 'Paid',
+      payment_status: 'OK',
+      late_payments: { days_30: 3, days_60: 0, days_90: null },
+      payment_history: null,
+    })
+    expect(details.accounts[2]).toMatchObject({
+      account_status: 'Closed',
+      payment_status: 'Past due',
+      payment_history: null,
+    })
+    expect(details.accounts[3]).toMatchObject({ account_status: null, payment_status: 'Worst', late_payments: null })
+    expect(details.inquiries).toEqual([
+      { name: 'Example Bank', date: '2026-10-01', type: null },
+      { name: 'Other Lender', date: 'Inquired on Sep 1, 2026', type: 'Hard' },
+    ])
+    expect(details.public_records).toEqual([
+      expect.objectContaining({ type: 'Tax lien', court: 'County', amount: -12 }),
+      expect.objectContaining({ type: 'Judgment', status: 'Filed' }),
+      expect.objectContaining({ type: 'other', court: 'Town' }),
+    ])
+
+    report.publicRecords = { bankruptcies: [], legalItems: [], taxLiens: [], miscPublicRecords: [] }
+    expect(parseCreditReportDetails(json, 'equifax', null).public_records).toEqual([])
+    report.publicRecords = 4
+    expect(parseCreditReportDetails(json, 'equifax', null).public_records).toEqual([])
+    report.collections = { agencyName: 'Solo Agency', amount: 3 }
+    expect(parseCreditReportDetails(json, 'equifax', null).collections).toEqual([
+      expect.objectContaining({ agency: 'Solo Agency', balance: -3 }),
+    ])
   })
 
   it('throws on a GraphQL error and on a missing report', () => {

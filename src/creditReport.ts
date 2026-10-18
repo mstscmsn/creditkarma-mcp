@@ -345,11 +345,11 @@ const BNPL_KEYS = ['buyNowPayLater', 'bnpl', 'bnplAccounts', 'buyNowPayLaterAcco
 export function parseCreditScore(json: unknown, requestedDate: string | null): CreditScoreFields {
   const report = requireReport(json)
   const scoreNode = obj(report['score'])
+  const label = textOf(report, ['scoreLabel', 'scoreText'])
   return {
     score: readScore(report['score']),
-    label: firstString(report, ['scoreLabel', 'scoreText']),
-    model: firstString(report, ['scoreModel', 'scoringModel', 'model', 'scoreType'])
-      ?? (scoreNode ? firstString(scoreNode, ['model', 'scoreModel']) : null),
+    label,
+    model: namedModel(report, label, scoreNode),
     report_date: firstString(report, ['dateReportPulled', 'reportDate']) ?? blankToNull(requestedDate),
   }
 }
@@ -371,7 +371,7 @@ export function parseCreditReportDetails(json: unknown, bureau: Bureau, requeste
       const row = parseCollection(raw)
       return row ? [row] : []
     }),
-    public_records: firstSection(report, ['publicRecords', 'publicRecord']).flatMap(raw => {
+    public_records: publicRecordItems(report).flatMap(raw => {
       const row = parsePublicRecord(raw)
       return row ? [row] : []
     }),
@@ -430,8 +430,10 @@ function parseAccount(raw: unknown, category: ReportAccountCategory): ReportAcco
     account_type: firstString(t, ['accountType', 'accountTypeDescription']),
     category,
     is_open: typeof t['isOpen'] === 'boolean' ? t['isOpen'] : null,
-    account_status: firstString(t, ['accountStatus', 'status']),
-    payment_status: firstString(t, ['paymentStatus', 'payStatus', 'accountCondition']),
+    account_status: textOf(t, ['accountStatus', 'accountStanding', 'status', 'accountStatusText', 'accountStandingLabel']),
+    payment_status: textOf(t, ['paymentStatus', 'payStatus', 'accountCondition'])
+      ?? textOf(obj(t['payments']), ['currentPaymentStatus', 'currentStatusString', 'currentPaymentStatusText'])
+      ?? textOf(t, ['worstPayStatus']),
     balance,
     credit_limit,
     utilization: utilization(balance, credit_limit),
@@ -439,7 +441,9 @@ function parseAccount(raw: unknown, category: ReportAccountCategory): ReportAcco
     closed_date: firstString(t, ['dateClosed', 'closedDate']),
     reported_date: firstString(t, ['dateReported', 'reportedDate']),
     late_payments: latePayments(t),
-    payment_history: paymentHistory(t['paymentHistory'] ?? t['paymentPattern']),
+    payment_history: paymentHistory(
+      t['paymentHistory'] ?? t['paymentPattern'] ?? obj(t['payments'])?.['paymentHistory'],
+    ),
   }
   const empty = row.institution === null && row.account_type === null && row.balance === null
     && row.opened_date === null && row.account_status === null && row.is_open === null
@@ -449,9 +453,13 @@ function parseAccount(raw: unknown, category: ReportAccountCategory): ReportAcco
 }
 
 function latePayments(t: Json): LatePayments | null {
-  const days_30 = readCount(t, ['times30DaysLate', 'late30Days', 'pastDue30'])
-  const days_60 = readCount(t, ['times60DaysLate', 'late60Days', 'pastDue60'])
-  const days_90 = readCount(t, ['times90DaysLate', 'late90Days', 'pastDue90'])
+  const payments = obj(t['payments'])
+  const days_30 = readCount(t, ['times30DaysLate', 'late30Days', 'pastDue30', 'late30Count'])
+    ?? (payments ? readCount(payments, ['late30Count', 'times30DaysLate']) : null)
+  const days_60 = readCount(t, ['times60DaysLate', 'late60Days', 'pastDue60', 'late60Count'])
+    ?? (payments ? readCount(payments, ['late60Count', 'times60DaysLate']) : null)
+  const days_90 = readCount(t, ['times90DaysLate', 'late90Days', 'pastDue90', 'late90Count'])
+    ?? (payments ? readCount(payments, ['late90Count', 'times90DaysLate']) : null)
   if (days_30 === null && days_60 === null && days_90 === null) return null
   return { days_30, days_60, days_90 }
 }
@@ -466,15 +474,37 @@ function readCount(t: Json, keys: string[]): number | null {
 
 function paymentHistory(v: unknown): string | null {
   if (typeof v === 'string') return v.trim() || null
-  if (!Array.isArray(v)) return null
-  const parts: string[] = []
-  for (const item of v) {
-    if (typeof item === 'string') {
-      if (item.trim()) parts.push(item.trim())
-      continue
+  if (Array.isArray(v)) {
+    const parts: string[] = []
+    for (const item of v) {
+      if (typeof item === 'string') {
+        if (item.trim()) parts.push(item.trim())
+        continue
+      }
+      const s = firstString(obj(item), ['status', 'code', 'value'])
+      if (s) parts.push(s)
     }
-    const s = firstString(obj(item), ['status', 'code', 'value'])
-    if (s) parts.push(s)
+    return parts.length ? parts.join(',') : null
+  }
+  const years = obj(v)?.['years']
+  if (!Array.isArray(years)) return null
+  const parts: string[] = []
+  for (const year of years) {
+    const y = obj(year)
+    const months = y?.['months']
+    if (!Array.isArray(months)) continue
+    const yearNum = finiteNumber(y?.['value'])
+    for (const month of months) {
+      const m = obj(month)
+      if (!m) continue
+      const status = str(m['status']) || formattedText(m['statusText'])
+      if (!status) continue
+      const monthNum = finiteNumber(m['month'])
+      const when = yearNum !== null && monthNum !== null
+        ? `${yearNum}-${String(monthNum).padStart(2, '0')}`
+        : null
+      parts.push(when ? `${when}:${status}` : status)
+    }
   }
   return parts.length ? parts.join(',') : null
 }
@@ -517,8 +547,8 @@ function parseInquiry(raw: unknown, defaultType: string | null): CreditInquiry |
   if (!t) return null
   const name = partyName(t['institution']) ?? partyName(t['inquirer'])
     ?? firstString(t, ['name', 'inquirerName', 'subscriberName', 'creditorName'])
-  const date = firstString(t, ['date', 'inquiryDate', 'inquiredOn', 'dateOfInquiry'])
-  const type = firstString(t, ['type', 'inquiryType']) ?? defaultType
+  const date = textOf(t, ['dateInquired', 'date', 'inquiryDate', 'inquiredOn', 'dateOfInquiry', 'dateInquiredLabel'])
+  const type = textOf(t, ['type', 'inquiryType', 'kind', 'inquiryKind']) ?? defaultType
   if (name === null && date === null) return null
   return { name, date, type }
 }
@@ -553,6 +583,33 @@ function parsePublicRecord(raw: unknown): PublicRecordItem | null {
   const empty = row.type === null && row.status === null && row.filed_date === null
     && row.amount === null && row.court === null
   return empty ? null : row
+}
+
+const PUBLIC_RECORD_TYPES: Record<string, string> = {
+  bankruptcies: 'Bankruptcy',
+  legalItems: 'Legal item',
+  taxLiens: 'Tax lien',
+  miscPublicRecords: 'Public record',
+}
+
+/**
+ * `publicRecords` is either a record, a list, or `CRSV2PublicRecords`
+ * (`bankruptcies` / `legalItems` / `taxLiens` / `miscPublicRecords`).
+ * An empty group must not hide the groups after it.
+ */
+function publicRecordItems(report: Json): unknown[] {
+  const node = report['publicRecords'] ?? report['publicRecord']
+  if (node == null) return []
+  if (Array.isArray(node)) return node
+  const o = obj(node)
+  if (!o) return []
+  const groups = Object.entries(o).filter((entry): entry is [string, unknown[]] => Array.isArray(entry[1]))
+  if (groups.length === 0) return [o]
+  return groups.flatMap(([key, list]) => list.map(item => {
+    const row = obj(item)
+    if (!row || firstString(row, ['type', 'publicRecordType', 'recordType'])) return item
+    return { ...row, type: PUBLIC_RECORD_TYPES[key] ?? key }
+  }))
 }
 
 /** First present section, unwrapped when CK nests the array one level down. */
@@ -599,6 +656,69 @@ function firstString(o: Json | undefined, keys: readonly string[]): string | nul
   for (const k of keys) {
     const s = str(o[k])
     if (s) return s
+  }
+  return null
+}
+
+/** A plain string, FormattedText (`spans[].text`), or BasicClientLabel (`text.spans`). */
+function formattedText(v: unknown): string | null {
+  if (typeof v === 'string') return v.trim() || null
+  const o = obj(v)
+  if (!o) return null
+  if (Array.isArray(o['spans'])) {
+    let text = ''
+    for (const span of o['spans']) {
+      if (typeof span === 'string') text += span
+      else {
+        const piece = obj(span)?.['text']
+        if (typeof piece === 'string') text += piece
+      }
+    }
+    const joined = text.trim()
+    if (joined) return joined
+  }
+  if ('text' in o) return formattedText(o['text'])
+  return null
+}
+
+function textOf(o: Json | undefined, keys: readonly string[]): string | null {
+  if (!o) return null
+  for (const k of keys) {
+    const s = formattedText(o[k])
+    if (s) return s
+  }
+  return null
+}
+
+/** Explicit model fields win. Otherwise the first "VantageScore" phrase in the report. */
+function namedModel(report: Json, label: string | null, scoreNode: Json | undefined): string | null {
+  const explicit = firstString(report, ['scoreModel', 'scoringModel', 'model', 'scoreType'])
+    ?? (scoreNode ? firstString(scoreNode, ['model', 'scoreModel']) : null)
+  if (explicit) return explicit
+  return modelInText(label) ?? modelInTree(report)
+}
+
+function modelInText(text: string | null): string | null {
+  if (!text) return null
+  const m = text.match(/vantagescore(?:\s*[34](?:\.\d)?)?/i)
+  if (!m) return null
+  return m[0].replace(/vantagescore/i, 'VantageScore').replace(/\s+/g, ' ')
+}
+
+function modelInTree(v: unknown): string | null {
+  if (typeof v === 'string') return modelInText(v)
+  if (Array.isArray(v)) {
+    for (const item of v) {
+      const found = modelInTree(item)
+      if (found) return found
+    }
+    return null
+  }
+  const o = obj(v)
+  if (!o) return null
+  for (const val of Object.values(o)) {
+    const found = modelInTree(val)
+    if (found) return found
   }
   return null
 }
