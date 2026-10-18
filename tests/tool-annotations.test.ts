@@ -7,6 +7,7 @@ import { registerSyncTools } from '../src/tools/sync.js'
 import { registerQueryTools } from '../src/tools/query.js'
 import { registerSqlTools } from '../src/tools/sql.js'
 import { registerBalanceTools } from '../src/tools/balances.js'
+import { registerCreditTools } from '../src/tools/credit.js'
 
 /**
  * Fleet annotation meta-test. `destructiveHint` DEFAULTS TO TRUE whenever
@@ -30,6 +31,7 @@ beforeAll(async () => {
     registerSyncTools(s, ctx)
     registerQueryTools(s, ctx)
     registerBalanceTools(s, ctx)
+    registerCreditTools(s, ctx)
     registerSqlTools(s, ctx)
   })
   ann = Object.fromEntries(
@@ -40,7 +42,7 @@ afterAll(async () => { if (harness) await harness.close() })
 
 describe('tool annotations', () => {
   it('covers the full surface (guards against a registrar being dropped here)', () => {
-    expect(Object.keys(ann)).toHaveLength(11)
+    expect(Object.keys(ann)).toHaveLength(13)
   })
 
   it('sets an explicit boolean destructiveHint on every write', () => {
@@ -64,6 +66,8 @@ describe('tool annotations', () => {
       ck_healthcheck: true,
       ck_sync_transactions: true,
       ck_get_account_balances: true, // refresh:true fetches live
+      ck_get_credit_scores: true,
+      ck_get_credit_report: true,
       // Local SQLite database or the local saved-session file only.
       ck_set_session: false,
       ck_forget_session: false,

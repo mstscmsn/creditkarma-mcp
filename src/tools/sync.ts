@@ -346,7 +346,7 @@ export async function ensureAuthenticated(ctx: AppContext): Promise<void> {
   }
 }
 
-async function refreshOrThrow(ctx: AppContext, tokenKnownDead = false): Promise<void> {
+export async function refreshOrThrow(ctx: AppContext, tokenKnownDead = false): Promise<void> {
   // Go back to the browser (or env) for credentials when the ones we hold are
   // missing OR provably dead.
   //

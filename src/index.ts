@@ -15,6 +15,7 @@ import { registerSyncTools } from './tools/sync.js'
 import { registerQueryTools } from './tools/query.js'
 import { registerSqlTools } from './tools/sql.js'
 import { registerBalanceTools } from './tools/balances.js'
+import { registerCreditTools } from './tools/credit.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -66,6 +67,7 @@ async function main() {
       registerSyncTools,
       registerQueryTools,
       registerBalanceTools,
+      registerCreditTools,
       registerSqlTools,
     ],
   })

@@ -19,6 +19,8 @@ Ask Claude things like:
 - *"How much did I spend in March compared to February?"*
 - *"Which accounts have the most activity?"*
 - *"What are my account balances?"*
+- *"What's my credit score?"*
+- *"Any hard inquiries on my credit report?"*
 - *"Run a SQL query against my transactions"*
 
 ## Requirements
@@ -157,6 +159,8 @@ The server extracts the access and refresh JWTs from the `CKAT` cookie inside th
 | `ck_forget_session` | Delete the saved-session file and clear in-memory credentials (local only; synced transactions are kept) |
 | `ck_sync_transactions` | Sync transactions into the local SQLite database, then refresh account balances |
 | `ck_get_account_balances` | Balance of every account: institution, type, last 4, current balance, available credit and credit limit (cards), as-of time and a `stale` flag. `refresh: true` fetches live first; `include_matched: true` also lists credit-report rows that duplicate a linked account |
+| `ck_get_credit_scores` | Current TransUnion and Equifax credit scores (VantageScore 3.0), with the report date, the score model when Credit Karma names one, and the change since previous pulls. `history_limit` (default 2) sets how many dated reports to include |
+| `ck_get_credit_report` | Credit report details for one or both bureaus: open and closed accounts (lender, type, status, balance, limit, utilization, opened date, payment status, late payments), hard inquiries, collections, public records, and buy-now-pay-later accounts. `date` reads a specific pull; `include_closed: false` drops closed accounts |
 | `ck_list_transactions` | List transactions with filters (date, account, category, merchant, amount) |
 | `ck_get_recent_transactions` | Fetch the N most recent transactions |
 | `ck_get_spending_by_category` | Spending totals grouped by category |
@@ -176,6 +180,8 @@ Transactions are synced from Credit Karma's GraphQL API into a local SQLite data
 - **Credit cards and loans** also come from your credit report (TransUnion by default; set `CK_CREDIT_BUREAU=equifax` to switch). These are as of the bureau's last report, usually 2–5 weeks old, with credit limits but no last 4. Closed accounts are dropped. When a credit-report account is clearly the same as a linked one (same lender, same credit limit, similar balance, the linked balance is at least as recent — and no other account fits), it is hidden as a duplicate; pass `include_matched: true` to see it. Doubtful pairs are never hidden.
 
 Balances follow the transaction sign convention: assets are positive, money owed (card balances, loans) is **negative**; `credit_limit` and `available_balance` are positive. `stale` is true when `balance_as_of` is more than 7 days old for linked accounts, or 35 days for credit-report accounts.
+
+**Credit scores and reports** are read live (nothing is written to the local database). `ck_get_credit_scores` returns each bureau's current score and, by default, the previous pull so the change is visible. `ck_get_credit_report` returns the accounts and the other sections of that same report. A bureau that has no report is reported on its own and does not hide the other bureau.
 
 **Auto-refresh**: if the access token has expired, the server automatically refreshes it before syncing. If the refresh token has also expired, it throws an error asking you to re-authenticate.
 
@@ -274,6 +280,7 @@ src/
                         ck_get_spending_by_category, ck_get_spending_by_merchant,
                         ck_get_account_summary
     balances.ts         ck_get_account_balances + the balance refresh run by every sync
+    credit.ts           ck_get_credit_scores, ck_get_credit_report — live, read-only
     sql.ts              ck_query_sql — SELECT-only escape hatch
 tests/
   helpers.ts            Shared test helpers (fakeServer, makeJwt)
