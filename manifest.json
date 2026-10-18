@@ -159,6 +159,10 @@
       "description": "Credit report details: accounts, hard inquiries, collections, public records, and buy-now-pay-later accounts"
     },
     {
+      "name": "ck_get_credit_factors",
+      "description": "Credit score factors derived from the newest report: utilization, payment history, age, mix, inquiries, and derogatory marks"
+    },
+    {
       "name": "ck_query_sql",
       "description": "Execute a raw SQL SELECT query against the transactions database (capped at max_rows, default 500)"
     }

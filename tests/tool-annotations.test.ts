@@ -42,7 +42,7 @@ afterAll(async () => { if (harness) await harness.close() })
 
 describe('tool annotations', () => {
   it('covers the full surface (guards against a registrar being dropped here)', () => {
-    expect(Object.keys(ann)).toHaveLength(13)
+    expect(Object.keys(ann)).toHaveLength(14)
   })
 
   it('sets an explicit boolean destructiveHint on every write', () => {
@@ -68,6 +68,7 @@ describe('tool annotations', () => {
       ck_get_account_balances: true, // refresh:true fetches live
       ck_get_credit_scores: true,
       ck_get_credit_report: true,
+      ck_get_credit_factors: true,
       // Local SQLite database or the local saved-session file only.
       ck_set_session: false,
       ck_forget_session: false,

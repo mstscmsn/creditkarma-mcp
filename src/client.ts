@@ -140,7 +140,8 @@ export const OPERATIONS = {
   /**
    * One bureau's full report. The balance path reads tradelines; the same
    * payload also carries the score and the other report sections
-   * (`ck_get_credit_scores`, `ck_get_credit_report`).
+   * (`ck_get_credit_scores`, `ck_get_credit_report`). `ck_get_credit_factors`
+   * derives its factors from this payload and does not add an operation.
    */
   getCreditReport: {
     operationName: 'getCreditReport',

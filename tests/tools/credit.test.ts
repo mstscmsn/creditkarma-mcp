@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
-  clampHistoryLimit, DEFAULT_HISTORY_LIMIT, handleGetCreditReport, handleGetCreditScores,
+  clampHistoryLimit, DEFAULT_HISTORY_LIMIT, handleGetCreditFactors, handleGetCreditReport, handleGetCreditScores,
   MAX_HISTORY_LIMIT, registerCreditTools, selectedBureaus,
 } from '../../src/tools/credit.js'
 import { CreditKarmaClient, type OperationSpec } from '../../src/client.js'
@@ -327,14 +327,16 @@ describe('ck_get_credit_report', () => {
     await expect(handleGetCreditReport({ bureau: 'transunion' }, ctx)).rejects.toThrow(/no credentials readable/)
   })
 
-  it('registers both tools as read-only network calls', async () => {
+  it('registers the credit tools as read-only network calls', async () => {
     const { server, calls } = fakeServer()
     registerCreditTools(server, ctx)
-    expect(calls.map(c => c.name)).toEqual(['ck_get_credit_scores', 'ck_get_credit_report'])
+    expect(calls.map(c => c.name)).toEqual(['ck_get_credit_scores', 'ck_get_credit_report', 'ck_get_credit_factors'])
     expect(calls[0].opts.annotations).toEqual({ readOnlyHint: true, idempotentHint: true, openWorldHint: true })
     expect(calls[1].opts.annotations).toEqual({ readOnlyHint: true, idempotentHint: true, openWorldHint: true })
+    expect(calls[2].opts.annotations).toEqual({ readOnlyHint: true, idempotentHint: true, openWorldHint: true })
     expect(calls[0].opts.inputSchema.shape).toHaveProperty('history_limit')
     expect(calls[1].opts.inputSchema.shape).toHaveProperty('include_closed')
+    expect(calls[2].opts.inputSchema.shape).toHaveProperty('bureau')
 
     stubCk(ctx, {
       getCreditReportHistory: () => reportHistory(['2024-02-01T00:00:00Z'], ['2024-02-02T00:00:00Z']),
@@ -344,5 +346,48 @@ describe('ck_get_credit_report', () => {
     expect(body.scores).toHaveLength(2)
     const report = JSON.parse((await calls[1].handler({ bureau: 'transunion' })).content[0].text) as { reports: unknown[] }
     expect(report.reports).toHaveLength(1)
+    const factors = JSON.parse((await calls[2].handler({ bureau: 'equifax' })).content[0].text) as {
+      factors: Array<{ ok: boolean }>
+    }
+    expect(factors.factors).toHaveLength(1)
+  })
+})
+
+describe('ck_get_credit_factors', () => {
+  let ctx: AppContext
+
+  beforeEach(() => {
+    ctx = { client: new CreditKarmaClient('valid-token'), db: initDb(':memory:') }
+  })
+  afterEach(() => vi.restoreAllMocks())
+
+  it('derives factors for each bureau that has a report', async () => {
+    stubCk(ctx, {
+      getCreditReportHistory: (v) => v.bureau === 1
+        ? reportHistory([])
+        : reportHistory([], ['2024-02-01T00:00:00Z']),
+      getCreditReport: () => scored(736),
+    })
+    const result = await handleGetCreditFactors({}, ctx)
+    expect(result.rating_note).toMatch(/approximations/)
+    expect(result.vantage_score_30_weights.credit_utilization).toBe(20)
+    expect(result.factors[0]).toEqual({
+      ok: false, bureau: 'transunion', error: 'Credit Karma has no transunion credit reports for this account.',
+    })
+    const equifax = result.factors[1]
+    if (!equifax.ok) throw new Error('expected equifax factors')
+    expect(equifax).toMatchObject({
+      bureau: 'equifax',
+      score: 736,
+      utilization: { overall_percent: 10, rating: 'good', ck_grade: null },
+      derogatory_marks: { count: 0, rating: 'excellent' },
+    })
+  })
+
+  it('rethrows auth failures', async () => {
+    stubCk(ctx, {
+      getCreditReportHistory: () => { throw new CkAuthError('session_rejected', 'session rejected') },
+    })
+    await expect(handleGetCreditFactors({ bureau: 'equifax' }, ctx)).rejects.toThrow(/session rejected/)
   })
 })

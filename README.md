@@ -21,6 +21,7 @@ Ask Claude things like:
 - *"What are my account balances?"*
 - *"What's my credit score?"*
 - *"Any hard inquiries on my credit report?"*
+- *"What's hurting my credit score?"*
 - *"Run a SQL query against my transactions"*
 
 ## Requirements
@@ -161,6 +162,7 @@ The server extracts the access and refresh JWTs from the `CKAT` cookie inside th
 | `ck_get_account_balances` | Balance of every account: institution, type, last 4, current balance, available credit and credit limit (cards), as-of time and a `stale` flag. `refresh: true` fetches live first; `include_matched: true` also lists credit-report rows that duplicate a linked account |
 | `ck_get_credit_scores` | Current TransUnion and Equifax credit scores (VantageScore 3.0), with the report date, the score model when Credit Karma names one, and the change since previous pulls. `history_limit` (default 2) sets how many dated reports to include |
 | `ck_get_credit_report` | Credit report details for one or both bureaus: open and closed accounts (lender, type, status, balance, limit, utilization, opened date, payment status, late payments), hard inquiries, collections, public records, and buy-now-pay-later accounts. `date` reads a specific pull; `include_closed: false` drops closed accounts |
+| `ck_get_credit_factors` | Factors derived from the newest credit report (no separate Credit Karma call): revolving utilization, payment history, credit age, account mix, hard inquiries, and derogatory marks. Each factor has an approximate rating and the published VantageScore 3.0 weight when one exists. `ck_grade` is null |
 | `ck_list_transactions` | List transactions with filters (date, account, category, merchant, amount) |
 | `ck_get_recent_transactions` | Fetch the N most recent transactions |
 | `ck_get_spending_by_category` | Spending totals grouped by category |
@@ -182,6 +184,17 @@ Transactions are synced from Credit Karma's GraphQL API into a local SQLite data
 Balances follow the transaction sign convention: assets are positive, money owed (card balances, loans) is **negative**; `credit_limit` and `available_balance` are positive. `stale` is true when `balance_as_of` is more than 7 days old for linked accounts, or 35 days for credit-report accounts.
 
 **Credit scores and reports** are read live (nothing is written to the local database). `ck_get_credit_scores` returns each bureau's current score and, by default, the previous pull so the change is visible. `ck_get_credit_report` returns the accounts and the other sections of that same report. A bureau that has no report is reported on its own and does not hide the other bureau.
+
+**Credit factors** (`ck_get_credit_factors`) are computed from that same report. Ratings are approximations from commonly cited thresholds, not Credit Karma's own grades (`ck_grade` is always null) and not a VantageScore formula. The bands are:
+
+- **Utilization** (open credit cards with a limit): under 10% excellent, 10% to under 30% good, 30% to under 50% fair, 50% or more poor.
+- **Payment history** (share of history months read as on time): 100% excellent, 99% to under 100% good, 90% to under 99% fair, under 90% poor. Unknown statuses are ignored.
+- **Credit age** (average age of open accounts): 9 years or more excellent, 7 to under 9 good, 3 to under 7 fair, under 3 poor.
+- **Account mix**: at least one open revolving and one open installment account is good, only one of those types is fair, neither is poor.
+- **Hard inquiries** (count in the 12 months before the report date): 0 excellent, 1–2 good, 3–4 fair, 5 or more poor. A row with no type counts as hard; `soft` does not.
+- **Derogatory marks** (collections plus public records): 0 excellent, 1 or more poor.
+
+Published VantageScore 3.0 weights on the result: payment history 40%, age and type of credit 21% (shared by age and mix, not added twice), credit utilization 20%, balances 11%, recent credit 5%, available credit 3%. Derogatory marks have no separate published weight.
 
 **Auto-refresh**: if the access token has expired, the server automatically refreshes it before syncing. If the refresh token has also expired, it throws an error asking you to re-authenticate.
 
@@ -269,6 +282,7 @@ src/
   db.ts                 SQLite schema, migrations, and upsert helpers
   vault.ts              Linked-account balances from Intuit's account vault
   creditReport.ts       Credit-report balances (cards and loans, weeks old)
+  creditFactors.ts      Score factors derived from a parsed credit report
   matching.ts           Pairs credit-report accounts with the linked accounts they duplicate
   json.ts               Small helpers for reading untyped API JSON
   transaction.graphql   Documents the transaction fields we read (sent as a persisted-query hash, not this text)
@@ -280,7 +294,7 @@ src/
                         ck_get_spending_by_category, ck_get_spending_by_merchant,
                         ck_get_account_summary
     balances.ts         ck_get_account_balances + the balance refresh run by every sync
-    credit.ts           ck_get_credit_scores, ck_get_credit_report — live, read-only
+    credit.ts           ck_get_credit_scores, ck_get_credit_report, ck_get_credit_factors — live, read-only
     sql.ts              ck_query_sql — SELECT-only escape hatch
 tests/
   helpers.ts            Shared test helpers (fakeServer, makeJwt)

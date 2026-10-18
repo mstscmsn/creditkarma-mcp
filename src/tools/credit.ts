@@ -7,8 +7,9 @@
  * `scoreLabel` plus inquiries, collections, public records and buy-now-pay-later
  * accounts; the balance parser only reads open tradelines. Score history is
  * the score on each dated pull: the history payload when it includes one,
- * otherwise that pull read back. No separate score-history operation is
- * registered here — a hash that isn't in the credit-health safelist 400s as
+ * otherwise that pull read back. Factors are derived from that same report
+ * (no third operation). No separate score-history operation is registered
+ * here — a hash that isn't in the credit-health safelist 400s as
  * "No query found", and these two calls are the ones CK's own report page uses.
  */
 import { z } from 'zod'
@@ -29,6 +30,7 @@ import {
   type CreditScoreFields,
   type ReportAccount,
 } from '../creditReport.js'
+import { deriveCreditFactors, FACTOR_THRESHOLDS, RATING_NOTE, VANTAGE_SCORE_30_WEIGHTS, type CreditFactors } from '../creditFactors.js'
 import { ensureAuthenticated, refreshOrThrow } from './sync.js'
 
 /** Current plus the previous pull — enough to show the change, short of a long walk. */
@@ -217,6 +219,20 @@ function openOnly(rows: ReportAccount[], includeClosed: boolean): ReportAccount[
   return includeClosed ? rows : rows.filter(a => a.is_open !== false)
 }
 
+async function fetchReport(ctx: AppContext, bureau: Bureau, date: string | undefined): Promise<CreditReportDetails> {
+  const when = date?.trim()
+    ? date.trim()
+    : newestReportDate(
+      await runOp(ctx, OPERATIONS.getCreditReportHistory, { bureau: BUREAU_CODE[bureau] }),
+      bureau,
+    )
+  return parseCreditReportDetails(
+    await runOp(ctx, OPERATIONS.getCreditReport, { bureau: BUREAU_CODE[bureau], date: when }),
+    bureau,
+    when,
+  )
+}
+
 async function reportForBureau(
   ctx: AppContext,
   bureau: Bureau,
@@ -224,23 +240,51 @@ async function reportForBureau(
   includeClosed: boolean,
 ): Promise<CreditReportOk | BureauFailure> {
   try {
-    const when = date?.trim()
-      ? date.trim()
-      : newestReportDate(
-        await runOp(ctx, OPERATIONS.getCreditReportHistory, { bureau: BUREAU_CODE[bureau] }),
-        bureau,
-      )
-    const details = parseCreditReportDetails(
-      await runOp(ctx, OPERATIONS.getCreditReport, { bureau: BUREAU_CODE[bureau], date: when }),
-      bureau,
-      when,
-    )
+    const details = await fetchReport(ctx, bureau, date)
     return {
       ok: true,
       ...details,
       accounts: openOnly(details.accounts, includeClosed),
       buy_now_pay_later: openOnly(details.buy_now_pay_later, includeClosed),
     }
+  } catch (err) {
+    rethrowAuth(err)
+    return { ok: false, bureau, error: errorMessage(err) }
+  }
+}
+
+export interface BureauFactors extends CreditFactors {
+  ok: true
+}
+
+export interface CreditFactorsResult {
+  rating_note: string
+  thresholds: typeof FACTOR_THRESHOLDS
+  vantage_score_30_weights: typeof VANTAGE_SCORE_30_WEIGHTS
+  factors: Array<BureauFactors | BureauFailure>
+}
+
+export interface CreditFactorsArgs {
+  bureau?: Bureau | 'both'
+}
+
+export async function handleGetCreditFactors(args: CreditFactorsArgs, ctx: AppContext): Promise<CreditFactorsResult> {
+  await ensureAuthenticated(ctx)
+  const factors: Array<BureauFactors | BureauFailure> = []
+  for (const bureau of selectedBureaus(args.bureau)) {
+    factors.push(await factorsForBureau(ctx, bureau))
+  }
+  return {
+    rating_note: RATING_NOTE,
+    thresholds: FACTOR_THRESHOLDS,
+    vantage_score_30_weights: VANTAGE_SCORE_30_WEIGHTS,
+    factors,
+  }
+}
+
+async function factorsForBureau(ctx: AppContext, bureau: Bureau): Promise<BureauFactors | BureauFailure> {
+  try {
+    return { ok: true, ...deriveCreditFactors(await fetchReport(ctx, bureau, undefined)) }
   } catch (err) {
     rethrowAuth(err)
     return { ok: false, bureau, error: errorMessage(err) }
@@ -295,5 +339,22 @@ export function registerCreditTools(server: McpServer, ctx: AppContext): void {
       }),
     },
     async (args) => minifiedResult(await handleGetCreditReport(args, ctx)),
+  )
+
+  server.registerTool(
+    'ck_get_credit_factors',
+    {
+      description:
+        'Credit score factors for TransUnion and Equifax (or one bureau), derived from the newest credit report. ' +
+        'No separate Credit Karma factors call. Returns overall and per-card revolving utilization, payment history ' +
+        '(on-time percentage and 30/60/90-day lates), credit age, open-account mix, hard inquiries over 6/12/24 months, ' +
+        'and derogatory marks (collections plus public records). Each factor has an approximate rating from commonly ' +
+        'cited thresholds (not Credit Karma\'s own grades — ck_grade is null) and the published VantageScore 3.0 ' +
+        'impact weight when that factor has one. A bureau with no report comes back ok:false and does not fail the ' +
+        'other. Read-only; nothing is stored.',
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
+      inputSchema: z.object({ bureau: bureauArg }),
+    },
+    async (args) => minifiedResult(await handleGetCreditFactors(args, ctx)),
   )
 }
