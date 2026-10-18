@@ -1,6 +1,6 @@
 ---
 name: creditkarma
-description: Access Credit Karma transaction data via MCP. Use when the user asks about their Credit Karma transactions, spending by category or merchant, account summaries, account balances, or wants to sync or query their financial data. Triggers on phrases like "sync my transactions", "what did I spend on", "show my Credit Karma data", "spending by category", "top merchants", or any request involving personal finance data from Credit Karma. Requires creditkarma-mcp installed and the creditkarma server registered (see Setup below).
+description: Access Credit Karma transaction, balance, credit-score, credit-report, and credit-factor data via MCP. Use when the user asks about their Credit Karma transactions, spending by category or merchant, account summaries, account balances, credit scores, credit reports (inquiries, collections, tradelines), or what is affecting a credit score (utilization, payment history, credit age), or wants to sync or query their financial data. Triggers on phrases like "sync my transactions", "what did I spend on", "show my Credit Karma data", "spending by category", "top merchants", "what's my credit score", "hard inquiries", "credit factors", "what's hurting my credit", or any request involving personal finance data from Credit Karma. Requires creditkarma-mcp installed and the creditkarma server registered (see Setup below).
 ---
 
 # creditkarma-mcp
@@ -102,6 +102,9 @@ The MCP handles auth automatically once any of the three paths is configured.
 | `ck_get_spending_by_merchant(start_date?, end_date?, category?, limit?)` | Spending totals grouped by merchant |
 | `ck_get_account_summary` | Transaction counts and totals per account |
 | `ck_get_account_balances(refresh?, include_matched?)` | Balance per account: institution, type, last 4, current balance, available credit and credit limit (cards), `balance_as_of`, `source` (`linked` — live from the aggregator, cards and loans included — or `credit_report`) and `stale`. Liabilities are negative. Prefer `linked` figures; credit-report balances lag 2–5 weeks — say so when quoting one. A credit-report row duplicating a linked account is hidden unless `include_matched` |
+| `ck_get_credit_scores(bureau?, history_limit?)` | Live TransUnion and Equifax scores (or one bureau). Credit Karma publishes these as VantageScore 3.0; `model` is set when the report names one. `history_limit` (default 2, max 36) is how many dated pulls to include, newest first. `change.since_previous` is the newest score minus the one before it. A bureau with no report is `ok: false` and does not fail the other |
+| `ck_get_credit_report(bureau?, date?, include_closed?)` | Live credit report: accounts, hard inquiries, collections, public records, buy-now-pay-later. Balances are negative when money is owed. `date` must be an exact timestamp from the score history. `include_closed` defaults to true |
+| `ck_get_credit_factors(bureau?)` | Factors derived from the newest report: utilization, payment history, credit age, account mix, hard inquiries (6/12/24 months), derogatory marks. Ratings are approximate thresholds, not Credit Karma grades (`ck_grade` is null). Includes published VantageScore 3.0 weights |
 | `ck_query_sql(sql, max_rows?)` | Read-only SQL query against the local database (SELECT only; at most `max_rows` rows, default 500 / max 5000 — `truncated: true` means page with LIMIT/OFFSET or aggregate) |
 
 ## Workflows

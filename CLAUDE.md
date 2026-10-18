@@ -45,6 +45,7 @@ src/
                         #   ck_get_spending_by_category, ck_get_spending_by_merchant,
                         #   ck_get_account_summary
     balances.ts         # ck_get_account_balances + refreshBalances() (run once by every sync)
+    credit.ts           # ck_get_credit_scores, ck_get_credit_report, ck_get_credit_factors (read-only, live)
     sql.ts              # ck_query_sql
 ```
 

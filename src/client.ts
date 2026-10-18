@@ -137,7 +137,12 @@ export const OPERATIONS = {
     clientVersion: CREDIT_HEALTH_CLIENT_VERSION,
     source: queryHash.CREDIT_HEALTH_SOURCE,
   },
-  /** One bureau's full report: typed tradelines with balances and limits. */
+  /**
+   * One bureau's full report. The balance path reads tradelines; the same
+   * payload also carries the score and the other report sections
+   * (`ck_get_credit_scores`, `ck_get_credit_report`). `ck_get_credit_factors`
+   * derives its factors from this payload and does not add an operation.
+   */
   getCreditReport: {
     operationName: 'getCreditReport',
     hash: 'e18b04e3456cf94d7286a538514340ba13eb6ff5229c18fe8a789fdff02d6801',

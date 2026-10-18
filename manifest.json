@@ -151,6 +151,18 @@
       "description": "Current balance of every account — linked bank, card, loan and investment accounts live, plus credit-report cards and loans — with credit limit, available credit, as-of time and a stale flag; refresh:true fetches live first"
     },
     {
+      "name": "ck_get_credit_scores",
+      "description": "Current TransUnion and Equifax credit scores, with report date, score model when named, and the change over recent pulls"
+    },
+    {
+      "name": "ck_get_credit_report",
+      "description": "Credit report details: accounts, hard inquiries, collections, public records, and buy-now-pay-later accounts"
+    },
+    {
+      "name": "ck_get_credit_factors",
+      "description": "Credit score factors derived from the newest report: utilization, payment history, age, mix, inquiries, and derogatory marks"
+    },
+    {
       "name": "ck_query_sql",
       "description": "Execute a raw SQL SELECT query against the transactions database (capped at max_rows, default 500)"
     }
